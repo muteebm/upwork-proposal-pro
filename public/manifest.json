@@ -8,6 +8,8 @@
     "default_title": "Open Proposal Pro"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
   ]
 }
