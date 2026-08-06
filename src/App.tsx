@@ -1,519 +1,309 @@
 import React, { useState, useEffect } from "react";
-import { GoogleGenAI } from "@google/genai";
 import { 
-  Briefcase, 
-  User, 
-  Wand2, 
-  Copy, 
-  Check, 
-  Plus,
-  X,
-  Sparkles,
-  FileText,
-  DollarSign,
-  Code
-} from "lucide-react";
+  Profile, 
+  PortfolioItem, 
+  JobDetails, 
+  ProposalRecord, 
+  Tone, 
+  Framework, 
+  QualityScore, 
+  ActiveTab 
+} from "./types";
+import { 
+  loadProfiles, 
+  saveProfiles, 
+  loadPortfolio, 
+  savePortfolio, 
+  loadVault, 
+  saveVault 
+} from "./utils/storage";
+import { generateProposal, refineProposal, evaluateProposal } from "./utils/ai";
+import { Header } from "./components/Header";
+import { Sidebar } from "./components/Sidebar";
+import { JobDetailsForm } from "./components/JobDetailsForm";
+import { StrategyControls } from "./components/StrategyControls";
+import { MilestoneCalculator } from "./components/MilestoneCalculator";
+import { RiskScannerCard } from "./components/RiskScannerCard";
+import { ProposalEditor } from "./components/ProposalEditor";
+import { QualityScoreCard } from "./components/QualityScoreCard";
+import { ProfilesManager } from "./components/ProfilesManager";
+import { PortfolioManager } from "./components/PortfolioManager";
+import { ProposalVault } from "./components/ProposalVault";
 import { motion, AnimatePresence } from "motion/react";
-import ReactMarkdown from "react-markdown";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
-interface Profile {
-  name: string;
-  title: string;
-  bio: string;
-  skills: string[];
-  experience: string;
-}
-
-interface JobDetails {
-  title: string;
-  budget: string;
-  skills: string;
-  description: string;
-}
-
-const DEFAULT_PROFILE: Profile = {
-  name: "",
-  title: "",
-  bio: "",
-  skills: [],
-  experience: "",
-};
 
 const DEFAULT_JOB: JobDetails = {
   title: "",
   budget: "",
   skills: "",
   description: "",
+  screeningQuestions: [],
 };
 
-type Tab = "job" | "proposal" | "profile";
-
 export default function App() {
-  const [profile, setProfile] = useState<Profile>(() => {
-    const saved = localStorage.getItem("upwork_profile");
-    return saved ? JSON.parse(saved) : DEFAULT_PROFILE;
+  const [profiles, setProfiles] = useState<Profile[]>(() => loadProfiles());
+  const [activeProfileId, setActiveProfileId] = useState<string>(() => {
+    const list = loadProfiles();
+    const def = list.find((p) => p.isDefault) || list[0];
+    return def ? def.id : "";
   });
 
+  const [portfolio, setPortfolio] = useState<PortfolioItem[]>(() => loadPortfolio());
+  const [vault, setVault] = useState<ProposalRecord[]>(() => loadVault());
+
   const [job, setJob] = useState<JobDetails>(DEFAULT_JOB);
-  const [proposal, setProposal] = useState("");
+  const [tone, setTone] = useState<Tone>("Consultative");
+  const [framework, setFramework] = useState<Framework>("Hook & Value");
+  const [proposalText, setProposalText] = useState("");
+  const [qualityScore, setQualityScore] = useState<QualityScore | undefined>(undefined);
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>("job");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [activeTab, setActiveTab] = useState<Tab>("job");
-  const [copied, setCopied] = useState(false);
-  const [newSkill, setNewSkill] = useState("");
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [savedInVault, setSavedInVault] = useState(false);
+
+  // Sync LocalStorage
+  useEffect(() => {
+    saveProfiles(profiles);
+  }, [profiles]);
 
   useEffect(() => {
-    localStorage.setItem("upwork_profile", JSON.stringify(profile));
-  }, [profile]);
+    savePortfolio(portfolio);
+  }, [portfolio]);
 
-  const isProfileValid = profile.bio.trim().length > 0;
-  const isJobValid = job.description.trim().length > 0;
-  const canGenerate = isProfileValid && isJobValid && !isGenerating;
+  useEffect(() => {
+    saveVault(vault);
+  }, [vault]);
+
+  const refreshStateFromStorage = () => {
+    setProfiles(loadProfiles());
+    setPortfolio(loadPortfolio());
+    setVault(loadVault());
+  };
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
+  const canGenerate = Boolean(activeProfile && job.description.trim().length > 10 && !isGenerating);
 
   const handleGenerate = async () => {
-    if (!canGenerate) return;
+    if (!canGenerate || !activeProfile) return;
 
     setIsGenerating(true);
-    // switch to proposal tab immediately to show loading state
+    setSavedInVault(false);
     setActiveTab("proposal");
-    
+
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `
-          You are an expert Upwork freelancer. Write a highly personalized, professional, and persuasive proposal for the following job description.
-          
-          MY PROFILE:
-          Name: ${profile.name}
-          Title: ${profile.title}
-          Bio: ${profile.bio}
-          Skills: ${profile.skills.join(", ")}
-          Experience: ${profile.experience}
-
-          JOB DETAILS:
-          Title: ${job.title}
-          Budget/Requirements: ${job.budget}
-          Required Skills: ${job.skills}
-          Description: ${job.description}
-
-          INSTRUCTIONS:
-          - Start with a strong hook that shows you've read the specific job details.
-          - Address the client's specific pain points mentioned in the description.
-          - Highlight relevant experience from my profile matching their required skills.
-          - If they mentioned a budget/timeline, acknowledge it confidently.
-          - Keep it concise but impactful.
-          - Include a clear call to action.
-          - Use a professional yet conversational tone.
-          - Do not use generic placeholders like [Your Name] if the name is provided.
-          - Format with markdown for readability.
-        `,
+      const result = await generateProposal({
+        profile: activeProfile,
+        portfolioItems: portfolio,
+        job,
+        tone,
+        framework,
       });
 
-      setProposal(response.text || "Failed to generate proposal.");
-    } catch (error) {
-      console.error("Generation error:", error);
-      setProposal("Error generating proposal. Please try again.");
+      setProposalText(result.proposalText);
+
+      // Evaluate score asynchronously
+      setIsEvaluating(true);
+      const score = await evaluateProposal(result.proposalText, job.description);
+      setQualityScore(score);
+      setIsEvaluating(false);
+    } catch (err: any) {
+      console.error("Proposal generation error:", err);
+      alert(err.message || "Failed to generate proposal.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(proposal);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const addSkill = () => {
-    if (newSkill && !profile.skills.includes(newSkill)) {
-      setProfile({ ...profile, skills: [...profile.skills, newSkill] });
-      setNewSkill("");
-    }
-  };
-
-  const removeSkill = (skillToRemove: string) => {
-    setProfile({
-      ...profile,
-      skills: profile.skills.filter((s) => s !== skillToRemove),
-    });
-  };
-
-  const handleScrapePage = async () => {
+  const handleRefine = async (instruction: string) => {
+    if (!proposalText) return;
+    setIsGenerating(true);
     try {
-      const extChrome = (window as any).chrome;
-      if (typeof extChrome !== "undefined" && extChrome.tabs && extChrome.scripting) {
-        const [tab] = await extChrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id) {
-          const results = await extChrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => {
-              let title = document.title.replace(' - Upwork', '').trim();
-              const titleEl = document.querySelector('h1, h2, h3, h4');
-              if (titleEl) title = (titleEl as HTMLElement).innerText.trim();
-              
-              let budget = "";
-              const featuresList = document.querySelector('ul.features, ul.features-list, [data-test="job-features"]');
-              if (featuresList) {
-                const features = Array.from(featuresList.querySelectorAll('li, .group')).map(el => (el as HTMLElement).innerText.trim().replace(/\n+/g, ' '));
-                if (features.length > 0) budget = features.filter(f => f.length < 100).join(' | ');
-              }
+      const updated = await refineProposal(proposalText, instruction);
+      setProposalText(updated);
+      setSavedInVault(false);
 
-              let description = "";
-              const descSelectors = ['[data-test="Description"]', '.text-body-sm.multiline-text', '[data-test="job-description-text"]', '.job-description', '[data-ev-sublocation="job_description"]'];
-              for (const sel of descSelectors) {
-                const descEl = document.querySelector(sel);
-                if (descEl) {
-                  description = (descEl as HTMLElement).innerText.trim();
-                  break;
-                }
-              }
-
-              let skills = "";
-              const skillChips = document.querySelectorAll('.skills-list a.air3-badge, .skills-list span.air3-badge, a.air3-badge, [data-test="skill"], span.up-skill-badge');
-              if (skillChips.length > 0) {
-                const uniqueSkills = new Set<string>();
-                skillChips.forEach(el => {
-                   const text = ((el as HTMLElement).innerText || "").replace(/\n/g, '').trim();
-                   if (text && text.length < 40 && !text.includes('jobs')) uniqueSkills.add(text);
-                });
-                skills = Array.from(uniqueSkills).join(', ');
-              }
-
-              // Fallback
-              if (!description || description.length < 20) {
-                 const root = document.querySelector('main') || document.body;
-                 description = (root as HTMLElement).innerText.substring(0, 8000);
-              }
-
-              return { title, budget, description, skills };
-            },
-          });
-          
-          if (results && results[0] && results[0].result) {
-            setJob(results[0].result);
-          }
-        }
-      } else {
-        alert("This feature only works when running as a browser extension. For testing, fill fields manually.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Failed to read the page. Make sure you are on a valid webpage and the extension has permissions.");
+      // Re-evaluate score
+      setIsEvaluating(true);
+      const score = await evaluateProposal(updated, job.description);
+      setQualityScore(score);
+      setIsEvaluating(false);
+    } catch (err: any) {
+      console.error("Refine error:", err);
+      alert(err.message || "Failed to refine proposal.");
+    } finally {
+      setIsGenerating(false);
     }
   };
 
-  const updateJobField = (field: keyof JobDetails, value: string) => {
-    setJob(prev => ({ ...prev, [field]: value }));
+  const handleAppendMilestones = (milestonesMarkdown: string) => {
+    setProposalText((prev) => prev + milestonesMarkdown);
+    setSavedInVault(false);
+  };
+
+  const handleSaveToVault = () => {
+    if (!proposalText || savedInVault) return;
+
+    const newRecord: ProposalRecord = {
+      id: `proposal-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      jobTitle: job.title || "Custom Job Post",
+      jobDescriptionSnippet: job.description.substring(0, 120) + "...",
+      proposalText,
+      status: "Submitted",
+      tone,
+      framework,
+      qualityScore,
+      profileName: activeProfile ? activeProfile.name : "Freelancer",
+    };
+
+    setVault((prev) => [newRecord, ...prev]);
+    setSavedInVault(true);
+  };
+
+  const handleLoadRecordIntoWorkspace = (record: ProposalRecord) => {
+    setJob((prev) => ({
+      ...prev,
+      title: record.jobTitle,
+      description: record.jobDescriptionSnippet,
+    }));
+    setProposalText(record.proposalText);
+    setTone(record.tone);
+    setFramework(record.framework);
+    setQualityScore(record.qualityScore);
+    setSavedInVault(true);
+    setActiveTab("proposal");
   };
 
   return (
-    <div className="w-full min-w-[450px] h-full min-h-[550px] bg-[#F9F9F9] text-[#1A1A1A] font-sans selection:bg-[#14A800]/20 flex flex-col">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm shrink-0">
-        <div className="w-full px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-[#14A800] rounded flex items-center justify-center shadow-sm">
-              <Sparkles className="text-white w-4 h-4" />
-            </div>
-            <h1 className="text-base font-bold tracking-tight text-gray-800">Proposal Pro</h1>
-          </div>
-        </div>
-        
-        {/* Mobile-friendly Tabs */}
-        <div className="flex border-t border-gray-100 bg-gray-50/50">
-          <button
-            onClick={() => setActiveTab("job")}
-            className={cn(
-              "flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors border-b-2",
-              activeTab === "job" ? "border-[#14A800] text-[#14A800] bg-white" : "border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            )}
-          >
-            Job Details
-          </button>
-          <button
-            onClick={() => setActiveTab("proposal")}
-            className={cn(
-              "flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors border-b-2",
-              activeTab === "proposal" ? "border-[#14A800] text-[#14A800] bg-white" : "border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            )}
-          >
-            Proposal
-          </button>
-          <button
-            onClick={() => setActiveTab("profile")}
-            className={cn(
-              "flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors border-b-2",
-              activeTab === "profile" ? "border-[#14A800] text-[#14A800] bg-white" : "border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            )}
-          >
-            Profile
-          </button>
-        </div>
-      </header>
+    <div className="w-full min-h-[580px] h-full bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-[#14A800]/20 flex flex-col">
+      <Header
+        activeProfile={activeProfile}
+        profilesCount={profiles.length}
+        onOpenProfiles={() => setActiveTab("profiles")}
+      />
 
-      <main className="flex-1 overflow-y-auto w-full mx-auto md:p-4 pb-12">
-        <div className="h-full md:bg-white md:rounded-xl md:shadow-sm md:border md:border-gray-200">
+      <div className="flex-1 max-w-7xl w-full mx-auto flex flex-col md:flex-row overflow-hidden p-2 sm:p-4 gap-3">
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          proposalCount={vault.length}
+          hasGeneratedProposal={Boolean(proposalText)}
+        />
+
+        <main className="flex-1 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 sm:p-5 shadow-xs">
           <AnimatePresence mode="popLayout">
             {activeTab === "job" && (
               <motion.div
                 key="job"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                className="space-y-4 p-4 md:p-6"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="grid grid-cols-1 md:grid-cols-12 gap-4"
               >
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-bold text-gray-800 uppercase tracking-widest flex items-center gap-2">
-                    <Briefcase className="w-4 h-4 text-[#14A800]" />
-                    Job Scope
-                  </h2>
-                  <button
-                    onClick={handleScrapePage}
-                    className="text-xs bg-[#14A800]/10 hover:bg-[#14A800]/20 text-[#14A800] px-3 py-1.5 rounded-lg transition-colors font-semibold flex items-center gap-1.5"
-                  >
-                    <Wand2 className="w-3.5 h-3.5" />
-                    Auto-Read
-                  </button>
+                <div className="md:col-span-7 space-y-4">
+                  <JobDetailsForm job={job} setJob={setJob} />
+                  <RiskScannerCard job={job} />
                 </div>
-
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Job Title</label>
-                    <input
-                      type="text"
-                      value={job.title}
-                      onChange={(e) => updateJobField("title", e.target.value)}
-                      placeholder="e.g. Need a React Native Expert"
-                      className="w-full p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                    />
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-gray-500 flex items-center gap-1"><DollarSign className="w-3 h-3"/> Budget / Info</label>
-                      <input
-                        type="text"
-                        value={job.budget}
-                        onChange={(e) => updateJobField("budget", e.target.value)}
-                        placeholder="e.g. $50/hr"
-                        className="w-full p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-gray-500 flex items-center gap-1"><Code className="w-3 h-3"/> Key Skills</label>
-                      <input
-                        type="text"
-                        value={job.skills}
-                        onChange={(e) => updateJobField("skills", e.target.value)}
-                        placeholder="e.g. React"
-                        className="w-full p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 flex items-center gap-1"><FileText className="w-3 h-3"/> Full Description</label>
-                    <textarea
-                      value={job.description}
-                      onChange={(e) => updateJobField("description", e.target.value)}
-                      placeholder="Paste the full job description here..."
-                      className="w-full h-32 p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all resize-none text-sm leading-relaxed bg-gray-50 focus:bg-white"
-                    />
-                  </div>
+                <div className="md:col-span-5 space-y-4">
+                  <StrategyControls
+                    selectedTone={tone}
+                    setSelectedTone={setTone}
+                    selectedFramework={framework}
+                    setSelectedFramework={setFramework}
+                    onGenerate={handleGenerate}
+                    canGenerate={canGenerate}
+                    isGenerating={isGenerating}
+                  />
+                  <MilestoneCalculator job={job} onAppendToProposal={handleAppendMilestones} />
                 </div>
-
-                {!isProfileValid && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-2 items-start mt-4 text-amber-800 text-xs shadow-sm">
-                    <span className="text-amber-500 text-sm">⚠️</span>
-                    <p>Go to your <strong>Profile</strong> tab to add your details first.</p>
-                  </div>
-                )}
-                {isProfileValid && !isJobValid && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex gap-2 items-start mt-4 text-blue-800 text-xs shadow-sm">
-                    <span className="text-blue-500 text-sm">ℹ️</span>
-                    <p>Hit Auto-Read or paste a description to generate proposal.</p>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleGenerate}
-                  disabled={!canGenerate}
-                  className={cn(
-                    "w-full mt-2 text-white font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm text-sm uppercase tracking-wide",
-                    canGenerate 
-                      ? "bg-[#14A800] hover:bg-[#118F00] shadow-[#14A800]/20 hover:shadow-md hover:-translate-y-0.5" 
-                      : "bg-gray-300 cursor-not-allowed text-gray-500"
-                  )}
-                >
-                  <Sparkles className="w-4 h-4" />
-                  Generate Proposal
-                </button>
               </motion.div>
             )}
 
             {activeTab === "proposal" && (
               <motion.div
                 key="proposal"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                className="flex flex-col h-full min-h-[400px] p-4 md:p-6"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="grid grid-cols-1 md:grid-cols-12 gap-4 h-full"
               >
-                <div className="flex items-center justify-between mb-4 shrink-0">
-                  <h2 className="text-sm font-bold text-gray-800 uppercase tracking-widest flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-[#14A800]" />
-                    AI Proposal
-                  </h2>
-                  {proposal && !isGenerating && (
-                    <button
-                      onClick={copyToClipboard}
-                      className="text-xs font-bold uppercase tracking-wider text-gray-600 bg-gray-100 hover:bg-gray-200 hover:text-gray-900 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
-                    >
-                      {copied ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-[#14A800]" />
-                          <span className="text-[#14A800]">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3" />
-                          <span>Copy</span>
-                        </>
-                      )}
-                    </button>
-                  )}
+                <div className="md:col-span-7 space-y-4 flex flex-col h-full">
+                  <ProposalEditor
+                    proposalText={proposalText}
+                    setProposalText={setProposalText}
+                    isGenerating={isGenerating}
+                    onRefine={handleRefine}
+                    onSaveToVault={handleSaveToVault}
+                    savedInVault={savedInVault}
+                  />
                 </div>
 
-                <div className="flex-1 overflow-y-auto bg-gray-50 rounded-xl border border-gray-200 p-4 prose prose-sm prose-green max-w-none shadow-inner">
-                  {isGenerating ? (
-                    <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-4 py-12">
-                      <div className="w-8 h-8 border-4 border-[#14A800]/20 border-t-[#14A800] rounded-full animate-spin" />
-                      <p className="text-sm font-medium animate-pulse">Drafting the perfect proposal...</p>
-                    </div>
-                  ) : proposal ? (
-                    <ReactMarkdown>{proposal}</ReactMarkdown>
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-3 py-10 text-center px-4">
-                      <Sparkles className="w-8 h-8 text-gray-300" />
-                      <p className="text-[13px]">No proposal yet.</p>
-                      <button 
-                        onClick={() => setActiveTab("job")}
-                        className="text-[#14A800] text-sm font-semibold hover:underline"
-                      >
-                        Go back to Job Details
-                      </button>
-                    </div>
-                  )}
+                <div className="md:col-span-5 space-y-4">
+                  <QualityScoreCard
+                    score={qualityScore}
+                    isEvaluating={isEvaluating}
+                    onReEvaluate={async () => {
+                      if (!proposalText) return;
+                      setIsEvaluating(true);
+                      const sc = await evaluateProposal(proposalText, job.description);
+                      setQualityScore(sc);
+                      setIsEvaluating(false);
+                    }}
+                  />
+                  <MilestoneCalculator job={job} onAppendToProposal={handleAppendMilestones} />
                 </div>
               </motion.div>
             )}
 
-            {activeTab === "profile" && (
+            {activeTab === "profiles" && (
               <motion.div
-                key="profile"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                className="space-y-5 p-4 md:p-6"
+                key="profiles"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
               >
-                <div className="flex items-center gap-2">
-                  <User className="w-4 h-4 text-[#14A800]" />
-                  <h2 className="text-sm font-bold text-gray-800 uppercase tracking-widest">Your Identity</h2>
-                </div>
+                <ProfilesManager
+                  profiles={profiles}
+                  setProfiles={setProfiles}
+                  activeProfileId={activeProfileId}
+                  setActiveProfileId={setActiveProfileId}
+                />
+              </motion.div>
+            )}
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Name</label>
-                    <input
-                      type="text"
-                      value={profile.name}
-                      onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-                      placeholder="e.g. John Doe"
-                      className="w-full p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Title</label>
-                    <input
-                      type="text"
-                      value={profile.title}
-                      onChange={(e) => setProfile({ ...profile, title: e.target.value })}
-                      placeholder="e.g. UI/UX Designer"
-                      className="w-full p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                    />
-                  </div>
-                </div>
+            {activeTab === "portfolio" && (
+              <motion.div
+                key="portfolio"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <PortfolioManager portfolio={portfolio} setPortfolio={setPortfolio} />
+              </motion.div>
+            )}
 
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-500">Bio / Overview</label>
-                  <textarea
-                    value={profile.bio}
-                    onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
-                    placeholder="Your elevator pitch..."
-                    className="w-full h-24 p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all resize-none text-sm leading-relaxed bg-gray-50 focus:bg-white"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-500">Experience Highlights</label>
-                  <textarea
-                    value={profile.experience}
-                    onChange={(e) => setProfile({ ...profile, experience: e.target.value })}
-                    placeholder="Key achievements..."
-                    className="w-full h-24 p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all resize-none text-sm leading-relaxed bg-gray-50 focus:bg-white"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold text-gray-500">Skills</label>
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {profile.skills.map((skill) => (
-                      <span
-                        key={skill}
-                        className="bg-[#14A800]/10 text-[#14A800] px-2.5 py-1 rounded-md text-[11px] font-bold tracking-wide flex items-center gap-1 border border-[#14A800]/20"
-                      >
-                        {skill}
-                        <button
-                          onClick={() => removeSkill(skill)}
-                          className="hover:text-red-500 transition-colors"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={newSkill}
-                      onChange={(e) => setNewSkill(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && addSkill()}
-                      placeholder="Add a skill"
-                      className="flex-1 p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#14A800]/20 focus:border-[#14A800] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                    />
-                    <button
-                      onClick={addSkill}
-                      className="bg-gray-100 hover:bg-gray-200 p-2.5 rounded-lg transition-all"
-                    >
-                      <Plus className="w-4 h-4 text-gray-600" />
-                    </button>
-                  </div>
-                </div>
+            {activeTab === "vault" && (
+              <motion.div
+                key="vault"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <ProposalVault
+                  vault={vault}
+                  setVault={setVault}
+                  onLoadIntoWorkspace={handleLoadRecordIntoWorkspace}
+                  onDataImported={refreshStateFromStorage}
+                />
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
-      </main>
-
-      <div className="text-center py-2 text-[10px] text-gray-400 bg-gray-50 border-t border-gray-100 shrink-0">
-        Powered by Gemini AI • Auto-Reader enabled
+        </main>
       </div>
+
+      <footer className="text-center py-2.5 text-[11px] text-slate-400 dark:text-slate-600 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shrink-0">
+        Upwork Proposal Pro v2.0 • Gemini 2.5 Flash • Smart Strategy Engine
+      </footer>
     </div>
   );
 }

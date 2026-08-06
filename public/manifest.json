@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Upwork Proposal Pro",
-  "version": "1.0.0",
-  "description": "Generate highly personalized Upwork proposals with AI.",
+  "name": "Upwork Proposal Pro v2.0",
+  "version": "2.0.0",
+  "description": "High-converting AI proposal generator & strategy workbench for Upwork freelancers.",
   "action": {
     "default_popup": "index.html",
     "default_title": "Open Proposal Pro"
@@ -11,5 +11,18 @@
     "storage",
     "activeTab",
     "scripting"
+  ],
+  "host_permissions": [
+    "https://*.upwork.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.upwork.com/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
   ]
 }
